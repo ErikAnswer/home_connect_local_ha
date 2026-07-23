@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import voluptuous as vol
-from aiohttp import ClientConnectionError, ClientConnectorSSLError
+from aiohttp import (
+    ClientConnectionError,
+    ClientConnectorSSLError,
+    ClientSession,
+    ClientTimeout,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_DESCRIPTION, CONF_DEVICE_ID, CONF_HOST
 from homeassistant.exceptions import (
@@ -33,6 +38,7 @@ from .const import (
     CONF_PSK,
     DOMAIN,
     PLATFORMS,
+    SOCKET_CONNECT_TIMEOUT,
 )
 from .entity_descriptions import get_available_entities
 
@@ -122,6 +128,12 @@ async def async_setup_entry(
 ) -> bool:
     """Set up this integration using config entry."""
     _LOGGER.debug("Setting up %s", config_entry.data[CONF_DESCRIPTION]["info"].get("model"))
+    session = ClientSession(
+        timeout=ClientTimeout(
+            connect=SOCKET_CONNECT_TIMEOUT,
+            sock_connect=SOCKET_CONNECT_TIMEOUT,
+        ),
+    )
     appliance = HomeAppliance(
         description=config_entry.data[CONF_DESCRIPTION],
         host=config_entry.data[CONF_HOST],
@@ -129,7 +141,9 @@ async def async_setup_entry(
         app_id=config_entry.data[CONF_DEVICE_ID],
         psk64=config_entry.data[CONF_PSK],
         iv64=config_entry.data.get(CONF_AES_IV, None),
+        session=session,
     )
+    vars(vars(appliance.session)["_socket"])["_owned_session"] = True
     try:
         await appliance.connect()
     except ClientConnectorSSLError as ex:
@@ -161,7 +175,11 @@ async def async_setup_entry(
             sw_version=appliance.info["swVersion"],
         )
         available_entities = get_available_entities(appliance)
-        config_entry.runtime_data = HCData(appliance, device_info, available_entities)
+        config_entry.runtime_data = HCData(
+            appliance,
+            device_info,
+            available_entities,
+        )
         await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
     except Exception:
         await appliance.close()

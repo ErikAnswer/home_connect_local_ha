@@ -48,14 +48,15 @@ class HCSensor(HCEntity, SensorEntity):
         device_info: DeviceInfo,
     ) -> None:
         super().__init__(entity_description, appliance, device_info)
-        if self._entity.enum:
-            if self.entity_description.device_class is None:
-                self._attr_device_class = SensorDeviceClass.ENUM
-            if self._attr_device_class == SensorDeviceClass.ENUM:
-                if self.entity_description.has_state_translation:
-                    self._attr_options = [str(value).lower() for value in self._entity.enum.values()]
-                else:
-                    self._attr_options = [str(value) for value in self._entity.enum.values()]
+        if self._entity.enum and self.entity_description.device_class in (
+            None,
+            SensorDeviceClass.ENUM,
+        ):
+            self._attr_device_class = SensorDeviceClass.ENUM
+            if self.entity_description.has_state_translation:
+                self._attr_options = [str(value).lower() for value in self._entity.enum.values()]
+            else:
+                self._attr_options = [str(value) for value in self._entity.enum.values()]
 
     @property
     def native_value(self) -> int | float | str:
