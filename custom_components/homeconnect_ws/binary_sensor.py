@@ -9,6 +9,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.const import EntityCategory
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .entity import HCEntity
 from .entity_descriptions.descriptions_definitions import HCBinarySensorEntityDescription
@@ -43,6 +44,7 @@ async def async_setup_entry(
             CONNECTION_SENSOR_DESCRIPTIONS,
             config_entry.runtime_data.appliance,
             config_entry.runtime_data.device_info,
+            config_entry.runtime_data.connection_signal,
         )
     )
     async_add_entites(entities)
@@ -78,6 +80,7 @@ class HCConnectionSensor(BinarySensorEntity):
         entity_description: HCBinarySensorEntityDescription,
         appliance: HomeAppliance,
         device_info: DeviceInfo,
+        connection_signal: str,
     ) -> None:
         super().__init__()
         self._appliance: HomeAppliance = appliance
@@ -85,6 +88,18 @@ class HCConnectionSensor(BinarySensorEntity):
         self._attr_unique_id = f"{appliance.info['deviceID']}-{entity_description.key}"
         self._attr_device_info: DeviceInfo = device_info
         self._attr_translation_key = entity_description.key
+        self._connection_signal = connection_signal
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to connection changes."""
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                self._connection_signal,
+                self.async_write_ha_state,
+            )
+        )
 
     @property
     def is_on(self) -> bool:

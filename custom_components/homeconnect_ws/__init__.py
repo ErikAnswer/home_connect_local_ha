@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from aiohttp import (
     ClientConnectionError,
-    ClientConnectorSSLError,
     ClientSession,
     ClientTimeout,
+    ClientWebSocketResponse,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_DESCRIPTION, CONF_DEVICE_ID, CONF_HOST
 from homeassistant.exceptions import (
-    ConfigEntryAuthFailed,
     ConfigEntryError,
-    ConfigEntryNotReady,
     ServiceValidationError,
 )
 from homeassistant.helpers.device_registry import (
@@ -26,6 +26,7 @@ from homeassistant.helpers.device_registry import (
     DeviceInfo,
     format_mac,
 )
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.service import async_extract_config_entry_ids
 from homeassistant.util.hass_dict import HassKey
 from homeconnect_websocket import HomeAppliance
@@ -39,6 +40,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SOCKET_CONNECT_TIMEOUT,
+    SOCKET_RECONNECT_DELAY,
 )
 from .entity_descriptions import get_available_entities
 
@@ -69,6 +71,9 @@ class HCData:
     appliance: HomeAppliance
     device_info: DeviceInfo
     available_entity_descriptions: _EntityDescriptionsType
+    session: HomeConnectClientSession
+    connection_signal: str
+    connection_task: asyncio.Task[None] | None = None
 
 
 @dataclass
@@ -83,6 +88,62 @@ class HCConfig:
 type HCConfigEntry = ConfigEntry[HCData]
 
 HC_KEY: HassKey[HCConfig] = HassKey(DOMAIN)
+
+
+class HomeConnectClientSession:
+    """Own the appliance session and disable incompatible websocket heartbeats."""
+
+    def __init__(self, timeout: ClientTimeout) -> None:
+        """Initialize the underlying client session."""
+        self._session = ClientSession(timeout=timeout)
+
+    async def ws_connect(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> ClientWebSocketResponse:
+        """Connect without the heartbeat rejected by Bosch appliances."""
+        kwargs.pop("heartbeat", None)
+        return await self._session.ws_connect(*args, **kwargs)
+
+    async def close(self) -> None:
+        """Close the underlying client session."""
+        await self._session.close()
+
+
+async def _async_manage_connection(
+    hass: HomeAssistant,
+    config_entry: HCConfigEntry,
+) -> None:
+    appliance = config_entry.runtime_data.appliance
+    host = config_entry.data[CONF_HOST]
+
+    while not appliance.session.connected:
+        try:
+            await appliance.connect()
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError, ClientConnectionError:
+            _LOGGER.debug("Appliance %s is not ready, retrying", host)
+        except Exception:
+            _LOGGER.exception("Failed to connect to appliance %s, retrying", host)
+
+        if appliance.session.connected:
+            break
+
+        socket = vars(appliance.session).get("_socket")
+        if socket:
+            with contextlib.suppress(Exception):
+                await socket.close()
+        await asyncio.sleep(SOCKET_RECONNECT_DELAY)
+
+    last_connected = False
+    while True:
+        connected = appliance.session.connected
+        if connected != last_connected:
+            async_dispatcher_send(hass, config_entry.runtime_data.connection_signal)
+            last_connected = connected
+        await asyncio.sleep(SOCKET_RECONNECT_DELAY)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -128,8 +189,8 @@ async def async_setup_entry(
 ) -> bool:
     """Set up this integration using config entry."""
     _LOGGER.debug("Setting up %s", config_entry.data[CONF_DESCRIPTION]["info"].get("model"))
-    session = ClientSession(
-        timeout=ClientTimeout(
+    session = HomeConnectClientSession(
+        ClientTimeout(
             connect=SOCKET_CONNECT_TIMEOUT,
             sock_connect=SOCKET_CONNECT_TIMEOUT,
         ),
@@ -143,23 +204,8 @@ async def async_setup_entry(
         iv64=config_entry.data.get(CONF_AES_IV, None),
         session=session,
     )
-    vars(vars(appliance.session)["_socket"])["_owned_session"] = True
-    try:
-        await appliance.connect()
-    except ClientConnectorSSLError as ex:
-        await appliance.close()
-        msg = f"Authentication failed with {config_entry.data[CONF_HOST]}"
-        raise ConfigEntryAuthFailed(msg) from ex
-    except (TimeoutError, ClientConnectionError) as ex:
-        await appliance.close()
-        msg = f"Can't connect to {config_entry.data[CONF_HOST]}"
-        raise ConfigEntryNotReady(msg) from ex
-    except Exception:
-        await appliance.close()
-        raise
 
     try:
-        _LOGGER.debug("Connected to %s", config_entry.data[CONF_DESCRIPTION]["info"].get("vib"))
         if not appliance.info:
             msg = "Appliance has no device info"
             raise ConfigEntryError(msg)
@@ -175,14 +221,23 @@ async def async_setup_entry(
             sw_version=appliance.info["swVersion"],
         )
         available_entities = get_available_entities(appliance)
+        connection_signal = f"{DOMAIN}_{config_entry.entry_id}_connection"
         config_entry.runtime_data = HCData(
             appliance,
             device_info,
             available_entities,
+            session,
+            connection_signal,
         )
         await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
+        config_entry.runtime_data.connection_task = config_entry.async_create_background_task(
+            hass,
+            _async_manage_connection(hass, config_entry),
+            f"Home Connect connection manager for {config_entry.title}",
+        )
     except Exception:
         await appliance.close()
+        await session.close()
         raise
     return True
 
@@ -190,7 +245,12 @@ async def async_setup_entry(
 async def async_unload_entry(hass: HomeAssistant, entry: HCConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.debug("Unloading %s", entry.data[CONF_DESCRIPTION]["info"].get("vib"))
+    if connection_task := entry.runtime_data.connection_task:
+        connection_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await connection_task
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         await entry.runtime_data.appliance.close()
+        await entry.runtime_data.session.close()
     return unload_ok
