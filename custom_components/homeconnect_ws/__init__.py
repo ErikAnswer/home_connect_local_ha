@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -30,9 +31,10 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.service import async_extract_config_entry_ids
 from homeassistant.util.hass_dict import HassKey
 from homeconnect_websocket import HomeAppliance
-from homeconnect_websocket.message import Message
 
 from .const import (
+    APPLIANCE_HANDSHAKE_TIMEOUT,
+    APPLIANCE_SEND_TIMEOUT,
     CONF_AES_IV,
     CONF_DEV_OVERRIDE_HOST,
     CONF_DEV_OVERRIDE_PSK,
@@ -41,7 +43,8 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SOCKET_CONNECT_TIMEOUT,
-    SOCKET_KEEPALIVE_INTERVAL,
+    SOCKET_PING_INITIAL_DELAY,
+    SOCKET_PING_INTERVAL,
     SOCKET_RECONNECT_DELAY,
 )
 from .entity_descriptions import get_available_entities
@@ -113,6 +116,17 @@ class HomeConnectClientSession:
         await self._session.close()
 
 
+class HomeConnectAppliance(HomeAppliance):
+    """Use timeouts that tolerate slow appliance responses."""
+
+    async def connect(self) -> None:
+        """Open the connection and allow the appliance to finish its handshake."""
+        await self.session.connect(
+            self._message_handler,
+            timeout=APPLIANCE_HANDSHAKE_TIMEOUT,
+        )
+
+
 async def _async_establish_connection(
     appliance: HomeAppliance,
     host: str,
@@ -156,24 +170,26 @@ async def _async_manage_connection(
 ) -> None:
     appliance = config_entry.runtime_data.appliance
     host = config_entry.data[CONF_HOST]
-    keepalive_enabled = appliance.info.get("type") == "Hob"
 
     while True:
         await _async_establish_connection(appliance, host)
         async_dispatcher_send(hass, config_entry.runtime_data.connection_signal)
-        next_keepalive = hass.loop.time() + SOCKET_KEEPALIVE_INTERVAL
+        next_ping = hass.loop.time() + SOCKET_PING_INITIAL_DELAY
 
         while appliance.session.connected:
-            if keepalive_enabled and hass.loop.time() >= next_keepalive:
+            if hass.loop.time() >= next_ping:
+                socket = vars(appliance.session).get("_socket")
+                websocket = vars(socket).get("_websocket") if socket else None
                 try:
-                    await appliance.session.send(Message(resource="/ni/info"))
+                    if websocket and not websocket.closed:
+                        await websocket.ping()
                 except ClientConnectionError, ConnectionError, RuntimeError:
                     _LOGGER.debug(
-                        "Keepalive failed for appliance %s",
+                        "Ping failed for appliance %s",
                         host,
                         exc_info=True,
                     )
-                next_keepalive = hass.loop.time() + SOCKET_KEEPALIVE_INTERVAL
+                next_ping = hass.loop.time() + SOCKET_PING_INTERVAL
 
             await asyncio.sleep(SOCKET_RECONNECT_DELAY)
 
@@ -235,7 +251,7 @@ async def async_setup_entry(
             sock_connect=SOCKET_CONNECT_TIMEOUT,
         ),
     )
-    appliance = HomeAppliance(
+    appliance = HomeConnectAppliance(
         description=config_entry.data[CONF_DESCRIPTION],
         host=config_entry.data[CONF_HOST],
         app_name="Homeassistant",
@@ -243,6 +259,10 @@ async def async_setup_entry(
         psk64=config_entry.data[CONF_PSK],
         iv64=config_entry.data.get(CONF_AES_IV, None),
         session=session,
+    )
+    appliance.session.send_sync = partial(
+        appliance.session.send_sync,
+        timeout=APPLIANCE_SEND_TIMEOUT,
     )
 
     try:
