@@ -30,6 +30,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.service import async_extract_config_entry_ids
 from homeassistant.util.hass_dict import HassKey
 from homeconnect_websocket import HomeAppliance
+from homeconnect_websocket.message import Message
 
 from .const import (
     CONF_AES_IV,
@@ -40,6 +41,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SOCKET_CONNECT_TIMEOUT,
+    SOCKET_KEEPALIVE_INTERVAL,
     SOCKET_RECONNECT_DELAY,
 )
 from .entity_descriptions import get_available_entities
@@ -111,39 +113,77 @@ class HomeConnectClientSession:
         await self._session.close()
 
 
+async def _async_establish_connection(
+    appliance: HomeAppliance,
+    host: str,
+) -> None:
+    while not appliance.session.connected:
+        receive_task = vars(appliance.session).get("_recv_task")
+        if receive_task is None or receive_task.done():
+            socket = vars(appliance.session).get("_socket")
+            if socket and not socket.closed:
+                with contextlib.suppress(Exception):
+                    await socket.close()
+
+            try:
+                await appliance.connect()
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError, ClientConnectionError:
+                _LOGGER.debug("Appliance %s is not ready, retrying", host)
+            except Exception:
+                _LOGGER.exception("Failed to connect to appliance %s, retrying", host)
+
+            receive_task = vars(appliance.session).get("_recv_task")
+            if (
+                not appliance.session.connected
+                and receive_task is not None
+                and not receive_task.done()
+            ):
+                socket = vars(appliance.session).get("_socket")
+                if socket and not socket.closed:
+                    with contextlib.suppress(Exception):
+                        await socket.close()
+        else:
+            appliance.session.retry_count = 0
+
+        await asyncio.sleep(SOCKET_RECONNECT_DELAY)
+
+
 async def _async_manage_connection(
     hass: HomeAssistant,
     config_entry: HCConfigEntry,
 ) -> None:
     appliance = config_entry.runtime_data.appliance
     host = config_entry.data[CONF_HOST]
+    keepalive_enabled = appliance.info.get("type") == "Hob"
 
-    while not appliance.session.connected:
-        try:
-            await appliance.connect()
-        except asyncio.CancelledError:
-            raise
-        except TimeoutError, ClientConnectionError:
-            _LOGGER.debug("Appliance %s is not ready, retrying", host)
-        except Exception:
-            _LOGGER.exception("Failed to connect to appliance %s, retrying", host)
-
-        if appliance.session.connected:
-            break
-
-        socket = vars(appliance.session).get("_socket")
-        if socket:
-            with contextlib.suppress(Exception):
-                await socket.close()
-        await asyncio.sleep(SOCKET_RECONNECT_DELAY)
-
-    last_connected = False
     while True:
-        connected = appliance.session.connected
-        if connected != last_connected:
-            async_dispatcher_send(hass, config_entry.runtime_data.connection_signal)
-            last_connected = connected
-        await asyncio.sleep(SOCKET_RECONNECT_DELAY)
+        await _async_establish_connection(appliance, host)
+        async_dispatcher_send(hass, config_entry.runtime_data.connection_signal)
+        next_keepalive = hass.loop.time() + SOCKET_KEEPALIVE_INTERVAL
+
+        while appliance.session.connected:
+            if keepalive_enabled and hass.loop.time() >= next_keepalive:
+                try:
+                    await appliance.session.send(Message(resource="/ni/info"))
+                except ClientConnectionError, ConnectionError, RuntimeError:
+                    _LOGGER.debug(
+                        "Keepalive failed for appliance %s",
+                        host,
+                        exc_info=True,
+                    )
+                next_keepalive = hass.loop.time() + SOCKET_KEEPALIVE_INTERVAL
+
+            await asyncio.sleep(SOCKET_RECONNECT_DELAY)
+
+        async_dispatcher_send(hass, config_entry.runtime_data.connection_signal)
+
+
+def _validate_appliance_info(appliance: HomeAppliance) -> None:
+    if not appliance.info:
+        msg = "Appliance has no device info"
+        raise ConfigEntryError(msg)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -206,9 +246,7 @@ async def async_setup_entry(
     )
 
     try:
-        if not appliance.info:
-            msg = "Appliance has no device info"
-            raise ConfigEntryError(msg)
+        _validate_appliance_info(appliance)
 
         device_info = DeviceInfo(
             connections={(CONNECTION_NETWORK_MAC, format_mac(appliance.info["mac"]))},
