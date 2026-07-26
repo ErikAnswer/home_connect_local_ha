@@ -34,6 +34,25 @@ To use this integration, you must first create a Home Connect account and connec
 - Select Appliance: Select the Appliance you want to setup
 - Host / IP-Address: Manually enter your Appliance Hostname or IP-Address
 
+## Repairing Local Access
+
+An appliance network reset can replace its local encryption key. When this
+happens, the integration stops reconnecting and opens a reauthentication flow
+instead of retrying the invalid key continuously.
+
+The reauthentication flow always supports uploading a newly downloaded profile
+ZIP. It also includes experimental cloud-assisted recovery:
+
+1. Register an application in the [Home Connect Developer portal](https://developer.home-connect.com/).
+2. Select **Authorization Code Grant Flow**.
+3. Set the redirect URI to `https://my.home-assistant.io/redirect/oauth`.
+4. Add the client ID and client secret under **Settings > Devices & services > Application credentials** in Home Assistant.
+5. Select **Link Home Connect account** in the appliance reauthentication flow.
+
+The local encryption profile is not part of the documented public Home Connect
+API. If the account token cannot access it, the integration keeps the existing
+configuration unchanged and asks for a profile ZIP.
+
 ## Remove integration
 
 This integration follows standard integration removal, no extra steps are required.

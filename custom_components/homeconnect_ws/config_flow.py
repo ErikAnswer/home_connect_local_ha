@@ -14,7 +14,6 @@ import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from aiohttp import ClientConnectionError, ClientConnectorSSLError
 from homeassistant.components.file_upload import process_uploaded_file
-from homeassistant.config_entries import ConfigFlow
 from homeassistant.const import (
     CONF_DESCRIPTION,
     CONF_DEVICE,
@@ -23,6 +22,7 @@ from homeassistant.const import (
     CONF_MODE,
     CONF_NAME,
 )
+from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.selector import (
     FileSelector,
     FileSelectorConfig,
@@ -38,6 +38,7 @@ from homeconnect_websocket import (
 )
 
 from . import HC_KEY, HCConfig
+from .cloud import CloudProfileError, async_fetch_encryption_credentials
 from .const import CONF_AES_IV, CONF_FILE, CONF_MANUAL_HOST, CONF_PSK, DOMAIN
 
 if TYPE_CHECKING:
@@ -100,8 +101,13 @@ def process_json_file(config_path: Path) -> dict[str, dict[str, dict | DeviceDes
     return {"config_entry": entry_data["data"]["entry_data"]}
 
 
-class HomeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
+class HomeConnectConfigFlow(
+    config_entry_oauth2_flow.AbstractOAuth2FlowHandler,
+    domain=DOMAIN,
+):
     """HomeConnect Config flow."""
+
+    DOMAIN = DOMAIN
 
     def __init__(self) -> None:
         super().__init__()
@@ -110,6 +116,11 @@ class HomeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
         self.appliances: dict[str, dict[str, dict | DeviceDescription]] = {}
         self.reauth_entry: HCConfigEntry = None
         self.global_config: HCConfig | None = None
+
+    @property
+    def logger(self) -> logging.Logger:
+        """Return the config flow logger."""
+        return _LOGGER
 
     def _process_profile_file(
         self, uploaded_file_id: str
@@ -291,12 +302,62 @@ class HomeConnectConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         return self.async_create_entry(title=data[CONF_NAME], data=data)
 
-    async def async_step_reauth(self, user_input: dict[str, Any]) -> ConfigFlowResult:
+    async def async_step_reauth(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
         """Reauth flow initialized."""
         _LOGGER.debug("Reauth flow initialized")
         self.reauth_entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
         self.data[CONF_HOST] = self.reauth_entry.data[CONF_HOST]
-        return await self.async_step_upload()
+        return self.async_show_menu(
+            step_id="reauth",
+            menu_options=["oauth", "upload"],
+        )
+
+    async def async_step_reconfigure(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Link an existing appliance to Home Connect OAuth."""
+        self.reauth_entry = self._get_reconfigure_entry()
+        self.data[CONF_HOST] = self.reauth_entry.data[CONF_HOST]
+        return self.async_show_menu(
+            step_id="reconfigure",
+            menu_options=["oauth", "upload"],
+        )
+
+    async def async_step_oauth(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Link the Home Connect account for cloud-assisted recovery."""
+        return await self.async_step_pick_implementation(user_input)
+
+    async def async_oauth_create_entry(self, data: dict) -> ConfigFlowResult:
+        """Install refreshed local credentials obtained with OAuth."""
+        if not self.reauth_entry or not self.reauth_entry.unique_id:
+            return self.async_abort(reason="oauth_existing_entry_only")
+
+        try:
+            credentials = await async_fetch_encryption_credentials(
+                self.hass,
+                self.reauth_entry.unique_id,
+                data["token"]["access_token"],
+            )
+        except (CloudProfileError, KeyError):
+            _LOGGER.warning(
+                "Home Connect cloud profile access is unavailable for appliance %s",
+                self.reauth_entry.unique_id,
+            )
+            return self.async_abort(reason="cloud_profile_unavailable")
+
+        self.data = {
+            **self.reauth_entry.data,
+            **data,
+            **credentials,
+        }
+        return await self.async_step_test_connection()
 
     async def async_step_set_data(
         self, user_input: dict[str, Any] | None = None

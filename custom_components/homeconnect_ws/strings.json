@@ -1,0 +1,5 @@
+{
+  "application_credentials": {
+    "description": "Create an OAuth application in the [Home Connect Developer portal]({developer_dashboard_url}). Use Authorization Code Grant Flow and `{redirect_url}` as the redirect URI. You can review existing applications on the [Applications page]({applications_url})."
+  }
+}

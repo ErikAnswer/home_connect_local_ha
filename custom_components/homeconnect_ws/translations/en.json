@@ -1,6 +1,25 @@
 {
+  "application_credentials": {
+    "description": "Create an OAuth application in the [Home Connect Developer portal]({developer_dashboard_url}). Use Authorization Code Grant Flow and `{redirect_url}` as the redirect URI. You can review existing applications on the [Applications page]({applications_url})."
+  },
   "config": {
     "step": {
+      "reauth": {
+        "title": "Repair local Home Connect access",
+        "description": "The local encryption key is no longer valid. Link your Home Connect account to recover it automatically, or upload a new profile ZIP.",
+        "menu_options": {
+          "oauth": "Link Home Connect account",
+          "upload": "Upload profile ZIP"
+        }
+      },
+      "reconfigure": {
+        "title": "Configure local credential recovery",
+        "description": "Link your Home Connect account for automatic local key recovery, or replace the current profile with a ZIP.",
+        "menu_options": {
+          "oauth": "Link Home Connect account",
+          "upload": "Upload profile ZIP"
+        }
+      },
       "upload": {
         "title": "Add new Home Connect Appliances",
         "description": "Upload your Profile file",
@@ -30,7 +49,18 @@
       "invalid_profile_file": "Profile File is invalid",
       "profile_file_parser_error": "Profile File is invalid: {error}",
       "appliance_not_in_profile_file": "Profile File dose not contain profile for this Appliance",
-      "all_setup": "All Appliances in this Profile File are already setup"
+      "all_setup": "All Appliances in this Profile File are already setup",
+      "oauth_existing_entry_only": "OAuth linking is only available for an existing appliance",
+      "cloud_profile_unavailable": "Home Connect did not allow access to this appliance's local profile. Upload a new profile ZIP instead.",
+      "missing_credentials": "Home Connect OAuth credentials have not been configured",
+      "missing_configuration": "Home Connect OAuth is not configured",
+      "oauth_error": "Home Connect returned an invalid OAuth token",
+      "oauth_failed": "Home Connect OAuth authentication failed",
+      "oauth_unauthorized": "Home Connect rejected the OAuth credentials",
+      "oauth_timeout": "Home Connect OAuth authentication timed out",
+      "authorize_url_timeout": "Generating the Home Connect authorization URL timed out",
+      "no_url_available": "Home Assistant has no URL available for OAuth",
+      "user_rejected_authorize": "Home Connect authorization was rejected"
     }
   },
   "entity": {

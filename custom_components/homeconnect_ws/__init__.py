@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from binascii import Error as BinasciiError
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import voluptuous as vol
 from aiohttp import (
     ClientConnectionError,
+    ClientConnectorSSLError,
     ClientSession,
     ClientTimeout,
     ClientWebSocketResponse,
@@ -19,6 +21,7 @@ from aiohttp import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_DESCRIPTION, CONF_DEVICE_ID, CONF_HOST
 from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
     ConfigEntryError,
     ServiceValidationError,
 )
@@ -32,6 +35,7 @@ from homeassistant.helpers.service import async_extract_config_entry_ids
 from homeassistant.util.hass_dict import HassKey
 from homeconnect_websocket import HomeAppliance
 
+from .cloud import async_maintain_oauth_token, async_refresh_encryption_credentials
 from .const import (
     APPLIANCE_HANDSHAKE_TIMEOUT,
     APPLIANCE_SEND_TIMEOUT,
@@ -79,6 +83,7 @@ class HCData:
     session: HomeConnectClientSession
     connection_signal: str
     connection_task: asyncio.Task[None] | None = None
+    oauth_task: asyncio.Task[None] | None = None
 
 
 @dataclass
@@ -143,6 +148,9 @@ async def _async_establish_connection(
                 await appliance.connect()
             except asyncio.CancelledError:
                 raise
+            except (ClientConnectorSSLError, BinasciiError) as ex:
+                msg = f"Authentication failed with appliance {host}"
+                raise ConfigEntryAuthFailed(msg) from ex
             except TimeoutError, ClientConnectionError:
                 _LOGGER.debug("Appliance %s is not ready, retrying", host)
             except Exception:
@@ -172,7 +180,22 @@ async def _async_manage_connection(
     host = config_entry.data[CONF_HOST]
 
     while True:
-        await _async_establish_connection(appliance, host)
+        try:
+            await _async_establish_connection(appliance, host)
+        except ConfigEntryAuthFailed:
+            _LOGGER.warning(
+                "Authentication failed for appliance %s; starting reauthentication",
+                host,
+            )
+            async_dispatcher_send(hass, config_entry.runtime_data.connection_signal)
+            if await async_refresh_encryption_credentials(hass, config_entry):
+                _LOGGER.info(
+                    "Refreshed local credentials for appliance %s; reloading",
+                    host,
+                )
+                return
+            config_entry.async_start_reauth(hass)
+            return
         async_dispatcher_send(hass, config_entry.runtime_data.connection_signal)
         next_ping = hass.loop.time() + SOCKET_PING_INITIAL_DELAY
 
@@ -293,6 +316,12 @@ async def async_setup_entry(
             _async_manage_connection(hass, config_entry),
             f"Home Connect connection manager for {config_entry.title}",
         )
+        if "token" in config_entry.data and "auth_implementation" in config_entry.data:
+            config_entry.runtime_data.oauth_task = config_entry.async_create_background_task(
+                hass,
+                async_maintain_oauth_token(hass, config_entry),
+                f"Home Connect OAuth maintenance for {config_entry.title}",
+            )
     except Exception:
         await appliance.close()
         await session.close()
@@ -303,10 +332,14 @@ async def async_setup_entry(
 async def async_unload_entry(hass: HomeAssistant, entry: HCConfigEntry) -> bool:
     """Unload a config entry."""
     _LOGGER.debug("Unloading %s", entry.data[CONF_DESCRIPTION]["info"].get("vib"))
-    if connection_task := entry.runtime_data.connection_task:
-        connection_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await connection_task
+    for task in (
+        entry.runtime_data.connection_task,
+        entry.runtime_data.oauth_task,
+    ):
+        if task:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         await entry.runtime_data.appliance.close()

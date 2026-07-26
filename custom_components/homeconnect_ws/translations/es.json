@@ -1,6 +1,25 @@
 {
+  "application_credentials": {
+    "description": "Crea una aplicación OAuth en el [portal de desarrolladores de Home Connect]({developer_dashboard_url}). Usa Authorization Code Grant Flow y `{redirect_url}` como URI de redirección. Puedes revisar las aplicaciones existentes en la [página Applications]({applications_url})."
+  },
   "config": {
     "step": {
+      "reauth": {
+        "title": "Reparar el acceso local de Home Connect",
+        "description": "La clave de cifrado local ya no es válida. Vincula tu cuenta Home Connect para recuperarla automáticamente o sube un ZIP de perfil nuevo.",
+        "menu_options": {
+          "oauth": "Vincular cuenta Home Connect",
+          "upload": "Subir ZIP de perfil"
+        }
+      },
+      "reconfigure": {
+        "title": "Configurar la recuperación de credenciales locales",
+        "description": "Vincula tu cuenta Home Connect para recuperar automáticamente la clave local o sustituye el perfil actual con un ZIP.",
+        "menu_options": {
+          "oauth": "Vincular cuenta Home Connect",
+          "upload": "Subir ZIP de perfil"
+        }
+      },
       "upload": {
         "title": "Añadir nuevos electrodomésticos Home Connect",
         "description": "Sube tu archivo de perfil",
@@ -30,7 +49,18 @@
       "invalid_profile_file": "El archivo de perfil no es válido",
       "profile_file_parser_error": "El archivo de perfil no es válido: {error}",
       "appliance_not_in_profile_file": "El archivo de perfil no contiene un perfil para este electrodoméstico",
-      "all_setup": "Todos los electrodomésticos de este archivo de perfil ya están configurados"
+      "all_setup": "Todos los electrodomésticos de este archivo de perfil ya están configurados",
+      "oauth_existing_entry_only": "La vinculación OAuth solo está disponible para un electrodoméstico existente",
+      "cloud_profile_unavailable": "Home Connect no ha permitido acceder al perfil local de este electrodoméstico. Sube un ZIP de perfil nuevo.",
+      "missing_credentials": "No se han configurado credenciales OAuth de Home Connect",
+      "missing_configuration": "OAuth de Home Connect no está configurado",
+      "oauth_error": "Home Connect ha devuelto un token OAuth no válido",
+      "oauth_failed": "Ha fallado la autenticación OAuth de Home Connect",
+      "oauth_unauthorized": "Home Connect ha rechazado las credenciales OAuth",
+      "oauth_timeout": "La autenticación OAuth de Home Connect ha agotado el tiempo",
+      "authorize_url_timeout": "Se ha agotado el tiempo al generar la URL de autorización de Home Connect",
+      "no_url_available": "Home Assistant no tiene una URL disponible para OAuth",
+      "user_rejected_authorize": "Se ha rechazado la autorización de Home Connect"
     }
   },
   "entity": {
