@@ -11,6 +11,6 @@
   "issue_tracker": "https://github.com/ErikAnswer/home_connect_local_ha/issues",
   "loggers": ["custom_components.homeconnect_ws", "homeconnect_websocket"],
   "requirements": ["homeconnect-websocket==1.3.6"],
-  "version": "1.1.6",
+  "version": "1.1.7",
   "zeroconf": ["_homeconnect._tcp.local."]
 }
