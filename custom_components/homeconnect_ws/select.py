@@ -78,37 +78,25 @@ class HCSelect(HCEntity, SelectEntity):
             return option
         return None
 
-    def _resolve_raw_option(self, option: str) -> str | int | bool:
-        if not self._entity.enum:
-            return option
-        option_lower = option.lower()
-        for enum_key, enum_value in self._entity.enum.items():
-            if str(enum_value).lower() == option_lower:
-                return enum_key
-        return option
-
-    async def _async_select_hood_option(self, option: str) -> bool:
-        if self._entity.name != "Cooking.Common.Option.Hood.VentingLevel":
-            return False
-
-        raw_value = self._resolve_raw_option(option)
-        if option.lower() == "fanoff":
-            active_program = self._appliance.entities.get("BSH.Common.Root.ActiveProgram")
-            if active_program is not None:
-                await active_program.set_value_raw(0)
-            else:
-                await self._entity.set_value_raw(raw_value)
-            return True
-
-        program = self._appliance.programs.get("Cooking.Common.Program.Hood.Venting")
-        if program is None:
-            return False
-        await program.start({self._entity.uid: raw_value})
-        return True
-
     async def async_select_option(self, option: str) -> None:
-        if await self._async_select_hood_option(option):
-            return
+        if self._entity.name == "Cooking.Common.Option.Hood.VentingLevel":
+            raw_value: str | int | bool = option
+            if self._entity.enum:
+                option_lower = option.lower()
+                for enum_key, enum_value in self._entity.enum.items():
+                    if str(enum_value).lower() == option_lower:
+                        raw_value = enum_key
+                        break
+
+            if option.lower() == "fanoff":
+                await self._entity.set_value_raw(raw_value)
+                return
+
+            program = self._appliance.programs.get("Cooking.Common.Program.Hood.Venting")
+            if program is not None:
+                await program.start({self._entity.uid: raw_value})
+                return
+
         real_option = option
         if self._rev_options and option in self._rev_options:
             real_option = self._rev_options[option]
