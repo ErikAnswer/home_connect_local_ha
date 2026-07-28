@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from homeassistant.components.select import SelectEntity
@@ -20,6 +21,9 @@ if TYPE_CHECKING:
     from .entity_descriptions.descriptions_definitions import HCSelectEntityDescription
 
 PARALLEL_UPDATES = 0
+
+_LOGGER = logging.getLogger(__name__)
+
 
 async def async_setup_entry(
     hass: HomeAssistant,  # noqa: ARG001
@@ -80,35 +84,36 @@ class HCSelect(HCEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         if self._entity.name == "Cooking.Common.Option.Hood.VentingLevel":
-            raw_value: str | int | bool = option
-            if self._entity.enum:
-                option_lower = option.lower()
-                for enum_key, enum_value in self._entity.enum.items():
-                    if str(enum_value).lower() == option_lower:
-                        raw_value = enum_key
-                        break
-
-            if option.lower() == "fanoff":
-                await self._entity.set_value_raw(raw_value)
-                return
-
             program = self._appliance.programs.get("Cooking.Common.Program.Hood.Venting")
             if program is not None:
-                await program.start({self._entity.uid: raw_value})
-                return
+                raw_value: str | int | bool = option
+                if self._entity.enum:
+                    option_lower = option.lower()
+                    for enum_key, enum_value in self._entity.enum.items():
+                        if str(enum_value).lower() == option_lower:
+                            raw_value = enum_key
+                            break
+                try:
+                    await program.start({self._entity.uid: raw_value})
+                    return
+                except Exception:
+                    _LOGGER.debug(
+                        "Failed to set hood venting via program start, falling back to direct option write",
+                        exc_info=True,
+                    )
 
         real_option = option
         if self._rev_options and option in self._rev_options:
             real_option = self._rev_options[option]
         try:
             await self._entity.set_value(real_option)
-        except ValueError:
+        except Exception:
             if not self._entity.enum:
                 raise
             option_lower = option.lower()
             for enum_key, enum_value in self._entity.enum.items():
                 if str(enum_value).lower() == option_lower:
-                    await self._entity.set_value_raw(enum_key)
+                    await self._entity.set_value(enum_key)
                     return
             raise
 
