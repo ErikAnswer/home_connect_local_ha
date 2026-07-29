@@ -295,7 +295,9 @@ async def test_generate_hob_zones(mock_homeconnect_appliance: MockApplianceType)
         entity="Cooking.Hob.Status.Zone.120.PowerLevel",
         has_state_translation=True,
     )
-    assert descriptions_by_key["sensor_hob_zone_120_current_temperature"] == HCSensorEntityDescription(
+    assert descriptions_by_key[
+        "sensor_hob_zone_120_current_temperature"
+    ] == HCSensorEntityDescription(
         key="sensor_hob_zone_120_current_temperature",
         translation_key="sensor_hob_zone_current_temperature",
         translation_placeholders={"group_name": "1"},

@@ -98,7 +98,8 @@ class HCSelect(HCEntity, SelectEntity):
                     return
                 except Exception:
                     _LOGGER.debug(
-                        "Failed to set hood venting via program start, falling back to direct option write",
+                        "Failed to set hood venting via program start, "
+                        "falling back to direct option write",
                         exc_info=True,
                     )
 

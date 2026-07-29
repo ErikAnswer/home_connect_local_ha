@@ -20,9 +20,7 @@ async def test_auth_failure_starts_reauth_without_retrying(
     hass = MagicMock()
     appliance = MagicMock()
     appliance.session.connected = False
-    appliance.connect = AsyncMock(
-        side_effect=ClientConnectorSSLError(MagicMock(), OSError())
-    )
+    appliance.connect = AsyncMock(side_effect=ClientConnectorSSLError(MagicMock(), OSError()))
     config_entry = MagicMock()
     config_entry.data = {CONF_HOST: "1.2.3.4"}
     config_entry.runtime_data = HCData(
@@ -63,9 +61,7 @@ async def test_auth_failure_uses_linked_account_before_reauth(
     hass = MagicMock()
     appliance = MagicMock()
     appliance.session.connected = False
-    appliance.connect = AsyncMock(
-        side_effect=ClientConnectorSSLError(MagicMock(), OSError())
-    )
+    appliance.connect = AsyncMock(side_effect=ClientConnectorSSLError(MagicMock(), OSError()))
     config_entry = MagicMock()
     config_entry.data = {CONF_HOST: "1.2.3.4"}
     config_entry.runtime_data = HCData(
